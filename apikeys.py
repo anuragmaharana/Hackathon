@@ -1,1 +1,1 @@
-gemini_key = "sdf-dsfsdfsdfdbdsfgf"
+gemini_key = "AQ.Ab8RN6IgDi3OB6-ccw3SM-A8x_T2BFYm9oXd6QeHAQuk-UmMag"

@@ -19,8 +19,8 @@ upscaling API or a plain Lanczos resize if the local model isn't available.
 
 Resilience:
     - Validation runs before any paid model call.
-    - The edit call gets retries with backoff, a fallback provider, and a
-      circuit breaker so one vendor outage doesn't stall the pipeline.
+        - The edit call gets retries with backoff and a circuit breaker so one
+            vendor outage does not repeatedly consume the pipeline.
     - Upscaling tries, in order: local qai_hub_models Real-ESRGAN -> remote
       upscale API (with its own retry policy) -> local Lanczos resize.
     - Automated QA runs before anything would go to a human reviewer.
@@ -33,10 +33,7 @@ Usage:
     config = APIConfig(
         edit_api_url="https://api.example.com/v1/edit",
         edit_api_key="sk-...",
-        edit_model="gemini-image-edit",
-        fallback_edit_api_url="https://api.fallback.com/v1/edit",
-        fallback_edit_api_key="sk-...",
-        fallback_edit_model="flux-kontext",
+        edit_model="gemini-2.5-flash-image",
         use_local_qai_upscaler=True,       # Real-ESRGAN-x4plus via qai_hub_models
         upscale_api_url="",                # optional remote fallback
         upscale_api_key="",
@@ -77,20 +74,18 @@ class APIConfig:
     can point this pipeline at whatever providers/models/keys they have."""
 
     # Instruction-following editor: handles segmentation + background + relight
-    edit_api_url: str = "https://generativelanguage.googleapis.com/v1beta/interactions"  # edit_api_url: str = ""
+    edit_api_url: str = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        "models/gemini-2.5-flash-image:generateContent"
+    )
     edit_api_key: str = gemini_key
-    edit_model: str = "gemini-3.1-flash-image"  # "gemini-image-edit"? # TODO
+    edit_model: str = "gemini-2.5-flash-image"
     edit_prompt: str = (
         "Remove the background, place the product on a seamless white "
         "studio backdrop, add a soft realistic contact shadow, and "
         "normalize the lighting to even, diffused studio lighting. "
         "Do not alter the product itself."
     )
-
-    # Fallback provider for the edit step (used if the primary fails)
-    fallback_edit_api_url: str = ""
-    fallback_edit_api_key: str = ""
-    fallback_edit_model: str = "flux-kontext"  # TODO "qwen-image-edit" local model
 
     # --- Upscaler ---------------------------------------------------------
     # Preferred path: run Real-ESRGAN-x4plus locally, in-process, via
@@ -216,8 +211,12 @@ def _call_image_api(
     for attempt in range(config.max_retries + 1):
         try:
             if "generativelanguage.googleapis.com" in api_url:
+                gemini_url = api_url
+                if "/models/" in gemini_url and ":generateContent" in gemini_url:
+                    prefix = gemini_url.split("/models/", 1)[0]
+                    gemini_url = f"{prefix}/models/{model}:generateContent"
                 response = requests.post(
-                    api_url,
+                    gemini_url,
                     params={"key": api_key},
                     json={
                         "contents": [{
@@ -264,6 +263,8 @@ def _call_image_api(
             last_error = exc
             status = getattr(exc.response, "status_code", None)
             detail = f"HTTP {status}" if status else type(exc).__name__
+            if exc.response is not None and exc.response.text:
+                detail = f"{detail}: {exc.response.text[:500]}"
             logger.warning("%s: attempt %d failed (%s)", stage_name, attempt + 1, detail)
             if attempt < config.max_retries:
                 time.sleep(config.retry_backoff_seconds * (2 ** attempt))
@@ -279,9 +280,8 @@ def edit_background_and_relight(image: Image.Image, config: APIConfig) -> Image.
     """Segments the subject and applies studio background + relighting in a
     single instruction-following edit call.
 
-    Redundancy, not perfection: retries with backoff, then a fallback
-    provider, guarded by a simple circuit breaker so a vendor outage
-    doesn't stall the whole queue.
+    Retries with backoff, guarded by a simple circuit breaker so a vendor
+    outage does not repeatedly consume the whole queue.
     """
     if config._circuit_open:
         raise CircuitOpenError(
@@ -306,33 +306,10 @@ def edit_background_and_relight(image: Image.Image, config: APIConfig) -> Image.
         config._consecutive_failures = 0
         return Image.open(io.BytesIO(result_bytes)).convert("RGB")
 
-    except PipelineError as primary_error:
+    except PipelineError:
         config._consecutive_failures += 1
-        logger.warning("Primary edit provider failed, trying fallback: %s", primary_error)
-
-        if not config.fallback_edit_api_url:
-            _maybe_trip_circuit_breaker(config)
-            raise
-
-        try:
-            result_bytes = _call_image_api(
-                api_url=config.fallback_edit_api_url,
-                api_key=config.fallback_edit_api_key,
-                model=config.fallback_edit_model,
-                image_bytes=image_bytes,
-                prompt=config.edit_prompt,
-                config=config,
-                stage_name="edit(fallback)",
-            )
-            config._consecutive_failures = 0
-            return Image.open(io.BytesIO(result_bytes)).convert("RGB")
-
-        except PipelineError as fallback_error:
-            config._consecutive_failures += 1
-            _maybe_trip_circuit_breaker(config)
-            raise PipelineError(
-                "Both primary and fallback edit providers failed"
-            ) from fallback_error
+        _maybe_trip_circuit_breaker(config)
+        raise
 
 
 def _maybe_trip_circuit_breaker(config: APIConfig) -> None:
@@ -584,7 +561,7 @@ if __name__ == "__main__":
     parser.add_argument("output", help="Path to write catalog image")
     parser.add_argument("--edit-api-url", default="")
     parser.add_argument("--edit-api-key", default="")
-    parser.add_argument("--edit-model", default="gemini-image-edit")
+    parser.add_argument("--edit-model", default="gemini-2.5-flash-image")
     parser.add_argument("--no-local-upscaler", action="store_true",
                          help="Skip the local qai_hub_models upscaler and go straight to the remote API/resize")
     parser.add_argument("--upscale-api-url", default="")

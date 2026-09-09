@@ -12,8 +12,7 @@ Pass --no-local-upscaler to skip that and use the remote --upscale-api-url
 (or a plain resize if none is set) instead.
 
 If you prefer, set the same values as environment variables instead:
-    EDIT_API_URL, EDIT_API_KEY, FALLBACK_EDIT_API_URL, FALLBACK_EDIT_API_KEY,
-    UPSCALE_API_URL, UPSCALE_API_KEY
+    EDIT_API_URL, EDIT_API_KEY, UPSCALE_API_URL, UPSCALE_API_KEY
 """
 
 from __future__ import annotations
@@ -68,12 +67,10 @@ def _collect_api_settings(args: argparse.Namespace, interactive: bool) -> dict[s
     """Collect missing API settings for an interactive CLI run."""
     default_edit_url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash-image-preview:generateContent"
+        "models/gemini-2.5-flash-image:generateContent"
     )
     edit_url = _get_value(args.edit_api_url, "EDIT_API_URL", default_edit_url)
     edit_key = _get_value(args.edit_api_key, "EDIT_API_KEY", _load_gemini_key())
-    fallback_url = _get_value(args.fallback_edit_api_url, "FALLBACK_EDIT_API_URL")
-    fallback_key = _get_value(args.fallback_edit_api_key, "FALLBACK_EDIT_API_KEY")
     upscale_url = _get_value(args.upscale_api_url, "UPSCALE_API_URL")
     upscale_key = _get_value(args.upscale_api_key, "UPSCALE_API_KEY")
 
@@ -86,8 +83,6 @@ def _collect_api_settings(args: argparse.Namespace, interactive: bool) -> dict[s
         return {
             "edit_url": edit_url,
             "edit_key": edit_key,
-            "fallback_url": fallback_url,
-            "fallback_key": fallback_key,
             "upscale_url": upscale_url,
             "upscale_key": upscale_key,
         }
@@ -103,9 +98,6 @@ def _collect_api_settings(args: argparse.Namespace, interactive: bool) -> dict[s
     edit_key = _prompt_value("Primary edit API key", edit_key, secret=True)
     if not edit_key:
         raise SystemExit("A primary edit API key is required.")
-    fallback_url = _prompt_value("Fallback edit API URL (optional)", fallback_url)
-    if fallback_url:
-        fallback_key = _prompt_value("Fallback edit API key (optional)", fallback_key, secret=True)
     if args.no_local_upscaler:
         upscale_url = _prompt_value("Upscale API URL (optional)", upscale_url)
         if upscale_url:
@@ -114,8 +106,6 @@ def _collect_api_settings(args: argparse.Namespace, interactive: bool) -> dict[s
     return {
         "edit_url": edit_url,
         "edit_key": edit_key,
-        "fallback_url": fallback_url,
-        "fallback_key": fallback_key,
         "upscale_url": upscale_url,
         "upscale_key": upscale_key,
     }
@@ -127,10 +117,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="output.jpg", help="Output image path")
     parser.add_argument("--edit-api-url", default=None, help="Primary edit API URL")
     parser.add_argument("--edit-api-key", default=None, help="Primary edit API key")
-    parser.add_argument("--fallback-edit-api-url", default=None, help="Fallback edit API URL")
-    parser.add_argument("--fallback-edit-api-key", default=None, help="Fallback edit API key")
-    parser.add_argument("--edit-model", default="gemini-image-edit", help="Primary edit model")
-    parser.add_argument("--fallback-edit-model", default="flux-kontext", help="Fallback edit model")
+    parser.add_argument(
+        "--edit-model",
+        default="gemini-2.5-flash-image",
+        help="Primary Gemini Flash image-edit model",
+    )
     parser.add_argument(
         "--no-local-upscaler",
         action="store_true",
@@ -185,10 +176,7 @@ def run_pipeline(args: argparse.Namespace | None = None) -> str:
     cfg = APIConfig(
         edit_api_url=api_settings["edit_url"],
         edit_api_key=api_settings["edit_key"],
-        fallback_edit_api_url=api_settings["fallback_url"],
-        fallback_edit_api_key=api_settings["fallback_key"],
         edit_model=args.edit_model,
-        fallback_edit_model=args.fallback_edit_model,
         use_local_qai_upscaler=not args.no_local_upscaler,
         local_qai_model_name=args.local_upscale_model,
         upscale_api_url=api_settings["upscale_url"],
